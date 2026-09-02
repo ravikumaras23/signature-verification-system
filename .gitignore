@@ -1,0 +1,43 @@
+# Large/unused model
+backend/model/lstm_signature_model.h5
+
+# Training dataset
+backend/dataset/train/*
+backend/dataset/val/*
+
+# Runtime/generated files
+backend/uploads/*
+backend/reports/*
+backend/model/backups/*
+backend/database/*.db
+backend/dataset/_retrain_validation/
+
+# Python
+backend/venv/
+__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+frontend/.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.log
+*.tmp
+*.temp
+backend/model/*_temp.keras
+backend/model/*.keras.new

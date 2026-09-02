@@ -1,0 +1,6 @@
+Copy your trained model file "signature_model.keras" into this folder.
+
+Expected path:
+backend/model/signature_model.keras
+
+Your current app.py loads this model. The React frontend sends images to Flask, and Flask runs the TensorFlow model.
