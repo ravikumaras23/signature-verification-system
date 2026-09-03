@@ -55,19 +55,33 @@ def create_app():
 
     allowed_origins = [
         "https://signature-verification-system-ruby.vercel.app",
+        "https://signature-verification-system-d2s5emzrj-ravi-6a21.vercel.app",
         "http://localhost:5173",
     ]
 
     frontend_url = os.getenv("FRONTEND_URL")
 
-    if frontend_url:
+    if frontend_url and frontend_url not in allowed_origins:
         allowed_origins.append(frontend_url)
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": allowed_origins}},
-        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        resources={
+            r"/api/*": {
+                "origins": allowed_origins
+            }
+        },
+        methods=[
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "OPTIONS"
+        ],
+        allow_headers=[
+            "Content-Type",
+            "Authorization"
+        ]
     )
 
     db.init_app(
