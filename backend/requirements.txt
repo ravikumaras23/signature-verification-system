@@ -5,5 +5,6 @@ Flask-JWT-Extended
 Werkzeug
 opencv-python
 numpy
-tensorflow
+tensorflow==2.20.0
 reportlab
+gunicorn 
