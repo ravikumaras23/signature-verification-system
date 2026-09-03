@@ -50,15 +50,21 @@ def create_app():
         exist_ok=True
     )
 
+    
     CORS(
         app,
         resources={
             r"/api/*": {
                 "origins": [
-                    "https://signature-verification-system-ruby.vercel.app"
+                    "https://signature-verification-system-ruby.vercel.app",
+                    "https://signature-verification-system-d2s5emzrj-ravi-6a21.vercel.app",
+                    r"https://.*\.vercel\.app",
+                    "http://localhost:5173"
                 ]
             }
-        }
+        },
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     db.init_app(
