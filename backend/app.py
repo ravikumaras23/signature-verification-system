@@ -54,7 +54,9 @@ def create_app():
         app,
         resources={
             r"/api/*": {
-                "origins": "*"
+                "origins": [
+                    "https://signature-verification-system-ruby.vercel.app"
+                ]
             }
         }
     )
