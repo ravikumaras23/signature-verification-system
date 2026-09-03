@@ -8,3 +8,4 @@ numpy
 tensorflow==2.20.0
 reportlab
 gunicorn 
+scipy
