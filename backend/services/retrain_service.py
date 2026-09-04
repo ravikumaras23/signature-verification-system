@@ -5,6 +5,7 @@ from datetime import datetime
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import load_model
+from tensorflow.keras import layers, models
 
 
 IMG_SIZE = 128
@@ -19,6 +20,9 @@ class SignatureRetrainer:
         genuine_dir,
         backup_dir
     ):
+        # IMPORTANT:
+        # model_path is now the SEPARATE retraining model.
+        # It must NOT point to signature_model.keras.
         self.model_path = model_path
         self.forged_dir = forged_dir
         self.genuine_dir = genuine_dir
@@ -82,6 +86,116 @@ class SignatureRetrainer:
         return forged_images, genuine_images
 
     # ---------------------------------------------------------
+    # Create separate 2-class retraining model
+    # ---------------------------------------------------------
+
+    def _create_model(self):
+
+        model = models.Sequential([
+            layers.Input(
+                shape=(IMG_SIZE, IMG_SIZE, 1)
+            ),
+
+            layers.Conv2D(
+                32,
+                (3, 3),
+                activation="relu"
+            ),
+            layers.MaxPooling2D(
+                (2, 2)
+            ),
+
+            layers.Conv2D(
+                64,
+                (3, 3),
+                activation="relu"
+            ),
+            layers.MaxPooling2D(
+                (2, 2)
+            ),
+
+            layers.Conv2D(
+                128,
+                (3, 3),
+                activation="relu"
+            ),
+            layers.MaxPooling2D(
+                (2, 2)
+            ),
+
+            layers.Flatten(),
+
+            layers.Dense(
+                128,
+                activation="relu"
+            ),
+
+            layers.Dropout(
+                0.5
+            ),
+
+            # TWO outputs:
+            # 0 = forged
+            # 1 = genuine
+            layers.Dense(
+                2,
+                activation="softmax"
+            )
+        ])
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=0.0001
+            ),
+            loss="categorical_crossentropy",
+            metrics=["accuracy"]
+        )
+
+        return model
+
+    # ---------------------------------------------------------
+    # Load or create retraining model
+    # ---------------------------------------------------------
+
+    def _get_retraining_model(self):
+
+        if os.path.exists(
+            self.model_path
+        ):
+
+            try:
+
+                model = load_model(
+                    self.model_path
+                )
+
+                # Make sure this is actually
+                # a 2-output model.
+                output_shape = model.output_shape
+
+                if (
+                    len(output_shape) == 2
+                    and output_shape[-1] == 2
+                ):
+
+                    model.compile(
+                        optimizer=tf.keras.optimizers.Adam(
+                            learning_rate=0.0001
+                        ),
+                        loss="categorical_crossentropy",
+                        metrics=["accuracy"]
+                    )
+
+                    return model
+
+            except Exception:
+                pass
+
+        # If there is no valid retraining model,
+        # create a fresh one.
+        return self._create_model()
+
+    # ---------------------------------------------------------
     # Model backup
     # ---------------------------------------------------------
 
@@ -90,9 +204,7 @@ class SignatureRetrainer:
         if not os.path.exists(
             self.model_path
         ):
-            raise FileNotFoundError(
-                f"Model not found: {self.model_path}"
-            )
+            return None
 
         os.makedirs(
             self.backup_dir,
@@ -104,7 +216,7 @@ class SignatureRetrainer:
         )
 
         backup_filename = (
-            f"signature_model_{timestamp}.keras"
+            f"retrain_model_{timestamp}.keras"
         )
 
         backup_path = os.path.join(
@@ -157,8 +269,6 @@ class SignatureRetrainer:
             exist_ok=True
         )
 
-        # Use approximately 20% for validation.
-        # Always use at least one image when possible.
         forged_validation_count = max(
             1,
             int(len(forged_images) * 0.2)
@@ -221,10 +331,6 @@ class SignatureRetrainer:
             genuine_images
         ) = self._validate_dataset()
 
-        # -----------------------------------------------------
-        # Backup existing model
-        # -----------------------------------------------------
-
         backup_path = self._backup_model()
 
         validation_root = os.path.join(
@@ -243,10 +349,6 @@ class SignatureRetrainer:
 
         try:
 
-            # -------------------------------------------------
-            # Create temporary validation dataset
-            # -------------------------------------------------
-
             (
                 forged_validation_dir,
                 genuine_validation_dir
@@ -257,29 +359,7 @@ class SignatureRetrainer:
             )
 
             # -------------------------------------------------
-            # IMPORTANT:
-            # Binary sigmoid model
-            # -------------------------------------------------
-            #
-            # Directory structure:
-            #
-            # train/
-            #   forged/
-            #   genuine/
-            #
-            # Keras alphabetical class mapping:
-            #
-            # forged  = 0
-            # genuine = 1
-            #
-            # class_mode="binary" returns:
-            #
-            # forged  -> 0
-            # genuine -> 1
-            #
-            # This matches:
-            #
-            # Dense(1, activation="sigmoid")
+            # Training data
             # -------------------------------------------------
 
             train_datagen = ImageDataGenerator(
@@ -308,7 +388,7 @@ class SignatureRetrainer:
                     ),
                     color_mode="grayscale",
                     batch_size=batch_size,
-                    class_mode="binary",
+                    class_mode="categorical",
                     shuffle=True
                 )
             )
@@ -322,32 +402,16 @@ class SignatureRetrainer:
                     ),
                     color_mode="grayscale",
                     batch_size=batch_size,
-                    class_mode="binary",
+                    class_mode="categorical",
                     shuffle=False
                 )
             )
 
             # -------------------------------------------------
-            # Load existing binary model
+            # Get SEPARATE retraining model
             # -------------------------------------------------
 
-            model = load_model(
-                self.model_path
-            )
-
-            # -------------------------------------------------
-            # Compile as binary classifier
-            # -------------------------------------------------
-
-            model.compile(
-                optimizer=tf.keras.optimizers.Adam(
-                    learning_rate=0.0001
-                ),
-                loss="binary_crossentropy",
-                metrics=[
-                    "accuracy"
-                ]
-            )
+            model = self._get_retraining_model()
 
             # -------------------------------------------------
             # Train
@@ -361,16 +425,12 @@ class SignatureRetrainer:
             )
 
             # -------------------------------------------------
-            # Save retrained model to temporary .keras file
+            # Save retraining model
             # -------------------------------------------------
 
             model.save(
                 temporary_model_path
             )
-
-            # -------------------------------------------------
-            # Replace old model only after successful training
-            # -------------------------------------------------
 
             os.replace(
                 temporary_model_path,
@@ -378,54 +438,49 @@ class SignatureRetrainer:
             )
 
             # -------------------------------------------------
-            # Get final metrics
+            # Final metrics
             # -------------------------------------------------
 
-            final_accuracy = None
-            final_val_accuracy = None
-            final_loss = None
-            final_val_loss = None
+            accuracy = None
+            validation_accuracy = None
+            loss = None
+            validation_loss = None
 
             if history.history.get(
                 "accuracy"
             ):
-                final_accuracy = (
-                    history.history[
-                        "accuracy"
-                    ][-1]
-                )
+                accuracy = history.history[
+                    "accuracy"
+                ][-1]
 
             if history.history.get(
                 "val_accuracy"
             ):
-                final_val_accuracy = (
-                    history.history[
-                        "val_accuracy"
-                    ][-1]
-                )
+                validation_accuracy = history.history[
+                    "val_accuracy"
+                ][-1]
 
             if history.history.get(
                 "loss"
             ):
-                final_loss = (
-                    history.history[
-                        "loss"
-                    ][-1]
-                )
+                loss = history.history[
+                    "loss"
+                ][-1]
 
             if history.history.get(
                 "val_loss"
             ):
-                final_val_loss = (
-                    history.history[
-                        "val_loss"
-                    ][-1]
-                )
+                validation_loss = history.history[
+                    "val_loss"
+                ][-1]
 
             return {
                 "success": True,
                 "message": (
-                    "Model retrained successfully."
+                    "Retraining model trained successfully."
+                ),
+                "model": os.path.basename(
+                    self.model_path
                 ),
                 "epochs": epochs,
                 "batch_size": batch_size,
@@ -438,49 +493,44 @@ class SignatureRetrainer:
                 "backup_path": backup_path,
                 "accuracy": (
                     round(
-                        float(final_accuracy),
+                        float(accuracy),
                         4
                     )
-                    if final_accuracy is not None
+                    if accuracy is not None
                     else None
                 ),
                 "validation_accuracy": (
                     round(
-                        float(
-                            final_val_accuracy
-                        ),
+                        float(validation_accuracy),
                         4
                     )
-                    if final_val_accuracy is not None
+                    if validation_accuracy is not None
                     else None
                 ),
                 "loss": (
                     round(
-                        float(final_loss),
+                        float(loss),
                         4
                     )
-                    if final_loss is not None
+                    if loss is not None
                     else None
                 ),
                 "validation_loss": (
                     round(
-                        float(final_val_loss),
+                        float(validation_loss),
                         4
                     )
-                    if final_val_loss is not None
+                    if validation_loss is not None
                     else None
                 )
             }
 
         except Exception:
 
-            # -------------------------------------------------
-            # If retraining fails, restore the previous model
-            # -------------------------------------------------
-
             if os.path.exists(
                 temporary_model_path
             ):
+
                 try:
                     os.remove(
                         temporary_model_path
@@ -488,9 +538,12 @@ class SignatureRetrainer:
                 except OSError:
                     pass
 
-            if os.path.exists(
+            # Restore previous retraining model,
+            # NOT signature_model.keras.
+            if backup_path and os.path.exists(
                 backup_path
             ):
+
                 try:
                     shutil.copy2(
                         backup_path,
@@ -503,13 +556,10 @@ class SignatureRetrainer:
 
         finally:
 
-            # -------------------------------------------------
-            # Remove temporary validation dataset
-            # -------------------------------------------------
-
             if os.path.exists(
                 validation_root
             ):
+
                 try:
                     shutil.rmtree(
                         validation_root
