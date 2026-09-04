@@ -3,14 +3,11 @@ import shutil
 from datetime import datetime
 
 import tensorflow as tf
-
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import load_model
-from tensorflow.keras.callbacks import EarlyStopping
 
 
 IMG_SIZE = 128
-BATCH_SIZE = 16
 
 
 class SignatureRetrainer:
@@ -18,28 +15,87 @@ class SignatureRetrainer:
     def __init__(
         self,
         model_path,
-        dataset_path,
-        backup_path
+        forged_dir,
+        genuine_dir,
+        backup_dir
     ):
         self.model_path = model_path
-        self.dataset_path = dataset_path
-        self.backup_path = backup_path
+        self.forged_dir = forged_dir
+        self.genuine_dir = genuine_dir
+        self.backup_dir = backup_dir
 
-    # -------------------------------------------------
-    # Backup current model
-    # -------------------------------------------------
+    # ---------------------------------------------------------
+    # Utility methods
+    # ---------------------------------------------------------
 
-    def backup_model(self):
+    def _valid_images(self, directory):
+
+        if not os.path.exists(directory):
+            return []
+
+        valid_extensions = (
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp"
+        )
+
+        files = []
+
+        for filename in os.listdir(directory):
+
+            full_path = os.path.join(
+                directory,
+                filename
+            )
+
+            if (
+                os.path.isfile(full_path)
+                and filename.lower().endswith(
+                    valid_extensions
+                )
+            ):
+                files.append(full_path)
+
+        return sorted(files)
+
+    def _validate_dataset(self):
+
+        forged_images = self._valid_images(
+            self.forged_dir
+        )
+
+        genuine_images = self._valid_images(
+            self.genuine_dir
+        )
+
+        if len(forged_images) == 0:
+            raise ValueError(
+                "No forged signature images found."
+            )
+
+        if len(genuine_images) == 0:
+            raise ValueError(
+                "No genuine signature images found."
+            )
+
+        return forged_images, genuine_images
+
+    # ---------------------------------------------------------
+    # Model backup
+    # ---------------------------------------------------------
+
+    def _backup_model(self):
 
         if not os.path.exists(
             self.model_path
         ):
             raise FileNotFoundError(
-                "Current signature model was not found."
+                f"Model not found: {self.model_path}"
             )
 
         os.makedirs(
-            self.backup_path,
+            self.backup_dir,
             exist_ok=True
         )
 
@@ -47,482 +103,416 @@ class SignatureRetrainer:
             "%Y%m%d_%H%M%S"
         )
 
-        backup_file = os.path.join(
-            self.backup_path,
+        backup_filename = (
             f"signature_model_{timestamp}.keras"
+        )
+
+        backup_path = os.path.join(
+            self.backup_dir,
+            backup_filename
         )
 
         shutil.copy2(
             self.model_path,
-            backup_file
+            backup_path
         )
 
-        return backup_file
+        return backup_path
 
-    # -------------------------------------------------
-    # Count images
-    # -------------------------------------------------
+    # ---------------------------------------------------------
+    # Validation dataset
+    # ---------------------------------------------------------
 
-    def count_images(
+    def _create_validation_dataset(
         self,
-        folder
+        forged_images,
+        genuine_images,
+        validation_root
     ):
 
-        if not os.path.exists(folder):
-            return 0
-
-        extensions = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".webp"
-        }
-
-        count = 0
-
-        for filename in os.listdir(folder):
-
-            path = os.path.join(
-                folder,
-                filename
+        if os.path.exists(
+            validation_root
+        ):
+            shutil.rmtree(
+                validation_root
             )
 
-            if not os.path.isfile(path):
-                continue
-
-            extension = os.path.splitext(
-                filename
-            )[1].lower()
-
-            if extension in extensions:
-                count += 1
-
-        return count
-
-    # -------------------------------------------------
-    # Validate dataset
-    # -------------------------------------------------
-
-    def validate_dataset(self):
-
-        train_path = os.path.join(
-            self.dataset_path,
-            "train"
-        )
-
-        forged_path = os.path.join(
-            train_path,
+        forged_validation_dir = os.path.join(
+            validation_root,
             "forged"
         )
 
-        genuine_path = os.path.join(
-            train_path,
+        genuine_validation_dir = os.path.join(
+            validation_root,
             "genuine"
         )
 
-        if not os.path.exists(
-            forged_path
-        ):
-
-            raise FileNotFoundError(
-                f"Missing folder: {forged_path}"
-            )
-
-        if not os.path.exists(
-            genuine_path
-        ):
-
-            raise FileNotFoundError(
-                f"Missing folder: {genuine_path}"
-            )
-
-        forged_count = self.count_images(
-            forged_path
-        )
-
-        genuine_count = self.count_images(
-            genuine_path
-        )
-
-        if forged_count == 0:
-
-            raise ValueError(
-                "No forged images found."
-            )
-
-        if genuine_count == 0:
-
-            raise ValueError(
-                "No genuine images found."
-            )
-
-        return {
-            "forged": forged_count,
-            "genuine": genuine_count,
-            "total": (
-                forged_count
-                + genuine_count
-            )
-        }
-
-    # -------------------------------------------------
-    # Create temporary validation dataset
-    # -------------------------------------------------
-
-    def create_validation_dataset(
-        self,
-        validation_ratio=0.2
-    ):
-
-        train_path = os.path.join(
-            self.dataset_path,
-            "train"
-        )
-
-        validation_path = os.path.join(
-            self.dataset_path,
-            "_retrain_validation"
-        )
-
-        # Remove previous temporary validation set
-        if os.path.exists(
-            validation_path
-        ):
-
-            shutil.rmtree(
-                validation_path
-            )
-
         os.makedirs(
-            validation_path,
+            forged_validation_dir,
             exist_ok=True
         )
 
-        classes = [
-            "forged",
-            "genuine"
-        ]
-
-        validation_counts = {}
-
-        for class_name in classes:
-
-            source = os.path.join(
-                train_path,
-                class_name
-            )
-
-            destination = os.path.join(
-                validation_path,
-                class_name
-            )
-
-            os.makedirs(
-                destination,
-                exist_ok=True
-            )
-
-            files = []
-
-            for filename in os.listdir(
-                source
-            ):
-
-                path = os.path.join(
-                    source,
-                    filename
-                )
-
-                if not os.path.isfile(
-                    path
-                ):
-                    continue
-
-                extension = (
-                    os.path.splitext(
-                        filename
-                    )[1]
-                    .lower()
-                )
-
-                if extension in {
-                    ".png",
-                    ".jpg",
-                    ".jpeg",
-                    ".webp"
-                }:
-
-                    files.append(
-                        filename
-                    )
-
-            # Deterministic shuffle
-            files.sort()
-
-            validation_count = max(
-                1,
-                int(
-                    len(files)
-                    * validation_ratio
-                )
-            )
-
-            # Keep enough images for training
-            if len(files) <= 2:
-                validation_count = 1
-
-            validation_files = files[
-                :validation_count
-            ]
-
-            for filename in validation_files:
-
-                shutil.copy2(
-                    os.path.join(
-                        source,
-                        filename
-                    ),
-                    os.path.join(
-                        destination,
-                        filename
-                    )
-                )
-
-            validation_counts[
-                class_name
-            ] = len(validation_files)
-
-        return (
-            validation_path,
-            validation_counts
+        os.makedirs(
+            genuine_validation_dir,
+            exist_ok=True
         )
 
-    # -------------------------------------------------
-    # Retrain model
-    # -------------------------------------------------
+        # Use approximately 20% for validation.
+        # Always use at least one image when possible.
+        forged_validation_count = max(
+            1,
+            int(len(forged_images) * 0.2)
+        )
+
+        genuine_validation_count = max(
+            1,
+            int(len(genuine_images) * 0.2)
+        )
+
+        forged_validation = forged_images[
+            :forged_validation_count
+        ]
+
+        genuine_validation = genuine_images[
+            :genuine_validation_count
+        ]
+
+        for source_path in forged_validation:
+
+            destination_path = os.path.join(
+                forged_validation_dir,
+                os.path.basename(source_path)
+            )
+
+            shutil.copy2(
+                source_path,
+                destination_path
+            )
+
+        for source_path in genuine_validation:
+
+            destination_path = os.path.join(
+                genuine_validation_dir,
+                os.path.basename(source_path)
+            )
+
+            shutil.copy2(
+                source_path,
+                destination_path
+            )
+
+        return (
+            forged_validation_dir,
+            genuine_validation_dir
+        )
+
+    # ---------------------------------------------------------
+    # Retraining
+    # ---------------------------------------------------------
 
     def retrain(
         self,
-        epochs=10
+        epochs=10,
+        batch_size=32
     ):
 
-        dataset_info = (
-            self.validate_dataset()
+        (
+            forged_images,
+            genuine_images
+        ) = self._validate_dataset()
+
+        # -----------------------------------------------------
+        # Backup existing model
+        # -----------------------------------------------------
+
+        backup_path = self._backup_model()
+
+        validation_root = os.path.join(
+            os.path.dirname(
+                os.path.dirname(
+                    self.forged_dir
+                )
+            ),
+            "validation_temp"
         )
 
-        # Backup old model first
-        backup_file = (
-            self.backup_model()
+        temporary_model_path = (
+            self.model_path
+            + ".temp.keras"
         )
-
-        validation_path = None
 
         try:
 
-            # Create temporary validation split
+            # -------------------------------------------------
+            # Create temporary validation dataset
+            # -------------------------------------------------
+
             (
-                validation_path,
-                validation_info
-            ) = self.create_validation_dataset()
-
-            train_path = os.path.join(
-                self.dataset_path,
-                "train"
+                forged_validation_dir,
+                genuine_validation_dir
+            ) = self._create_validation_dataset(
+                forged_images,
+                genuine_images,
+                validation_root
             )
 
-            # ---------------------------
-            # Training generator
-            # ---------------------------
+            # -------------------------------------------------
+            # IMPORTANT:
+            # Binary sigmoid model
+            # -------------------------------------------------
+            #
+            # Directory structure:
+            #
+            # train/
+            #   forged/
+            #   genuine/
+            #
+            # Keras alphabetical class mapping:
+            #
+            # forged  = 0
+            # genuine = 1
+            #
+            # class_mode="binary" returns:
+            #
+            # forged  -> 0
+            # genuine -> 1
+            #
+            # This matches:
+            #
+            # Dense(1, activation="sigmoid")
+            # -------------------------------------------------
 
-            train_datagen = (
-                ImageDataGenerator(
-                    rescale=1.0 / 255.0,
-                    rotation_range=10,
-                    zoom_range=0.15,
-                    shear_range=0.10
-                )
+            train_datagen = ImageDataGenerator(
+                rescale=1.0 / 255.0,
+                rotation_range=10,
+                width_shift_range=0.1,
+                height_shift_range=0.1,
+                shear_range=0.1,
+                zoom_range=0.1,
+                horizontal_flip=False,
+                fill_mode="nearest"
             )
 
-            # ---------------------------
-            # Validation generator
-            # ---------------------------
-
-            validation_datagen = (
-                ImageDataGenerator(
-                    rescale=1.0 / 255.0
-                )
+            validation_datagen = ImageDataGenerator(
+                rescale=1.0 / 255.0
             )
 
-            train_data = (
+            train_generator = (
                 train_datagen.flow_from_directory(
-                    train_path,
+                    os.path.dirname(
+                        self.forged_dir
+                    ),
                     target_size=(
                         IMG_SIZE,
                         IMG_SIZE
                     ),
                     color_mode="grayscale",
-                    batch_size=BATCH_SIZE,
-                    class_mode="categorical",
+                    batch_size=batch_size,
+                    class_mode="binary",
                     shuffle=True
                 )
             )
 
-            validation_data = (
-                validation_datagen
-                .flow_from_directory(
-                    validation_path,
+            validation_generator = (
+                validation_datagen.flow_from_directory(
+                    validation_root,
                     target_size=(
                         IMG_SIZE,
                         IMG_SIZE
                     ),
                     color_mode="grayscale",
-                    batch_size=BATCH_SIZE,
-                    class_mode="categorical",
+                    batch_size=batch_size,
+                    class_mode="binary",
                     shuffle=False
                 )
             )
 
-            print(
-                "Class mapping:",
-                train_data.class_indices
-            )
-
-            # ---------------------------
-            # Load existing model
-            # ---------------------------
+            # -------------------------------------------------
+            # Load existing binary model
+            # -------------------------------------------------
 
             model = load_model(
                 self.model_path
             )
 
-            # ---------------------------
-            # Fine-tuning
-            # ---------------------------
+            # -------------------------------------------------
+            # Compile as binary classifier
+            # -------------------------------------------------
 
             model.compile(
                 optimizer=tf.keras.optimizers.Adam(
-                    learning_rate=0.00001
+                    learning_rate=0.0001
                 ),
-                loss="categorical_crossentropy",
+                loss="binary_crossentropy",
                 metrics=[
                     "accuracy"
                 ]
             )
 
-            early_stopping = (
-                EarlyStopping(
-                    monitor="val_loss",
-                    patience=3,
-                    restore_best_weights=True
-                )
-            )
+            # -------------------------------------------------
+            # Train
+            # -------------------------------------------------
 
             history = model.fit(
-                train_data,
-                validation_data=
-                    validation_data,
-                epochs=int(epochs),
-                callbacks=[
-                    early_stopping
-                ]
+                train_generator,
+                validation_data=validation_generator,
+                epochs=epochs,
+                verbose=1
             )
 
-            # ---------------------------
-            # Save temporary model
-            # ---------------------------
-
-            temporary_model = os.path.join(
-                os.path.dirname(self.model_path),
-                "signature_model_retrained_temp.keras"
-            )
+            # -------------------------------------------------
+            # Save retrained model to temporary .keras file
+            # -------------------------------------------------
 
             model.save(
-                temporary_model
-            )   
+                temporary_model_path
+            )
 
-            if not os.path.exists(
-                temporary_model
-            ):
-
-                raise RuntimeError(
-                    "New model was not created."
-                )
-
-            # ---------------------------
-            # Replace old model
-            # ---------------------------
+            # -------------------------------------------------
+            # Replace old model only after successful training
+            # -------------------------------------------------
 
             os.replace(
-                temporary_model,
+                temporary_model_path,
                 self.model_path
             )
 
-            accuracy = (
-                history.history
-                .get(
-                    "accuracy",
-                    [0]
-                )[-1]
-            )
+            # -------------------------------------------------
+            # Get final metrics
+            # -------------------------------------------------
 
-            validation_accuracy = (
-                history.history
-                .get(
-                    "val_accuracy",
-                    [0]
-                )[-1]
-            )
+            final_accuracy = None
+            final_val_accuracy = None
+            final_loss = None
+            final_val_loss = None
+
+            if history.history.get(
+                "accuracy"
+            ):
+                final_accuracy = (
+                    history.history[
+                        "accuracy"
+                    ][-1]
+                )
+
+            if history.history.get(
+                "val_accuracy"
+            ):
+                final_val_accuracy = (
+                    history.history[
+                        "val_accuracy"
+                    ][-1]
+                )
+
+            if history.history.get(
+                "loss"
+            ):
+                final_loss = (
+                    history.history[
+                        "loss"
+                    ][-1]
+                )
+
+            if history.history.get(
+                "val_loss"
+            ):
+                final_val_loss = (
+                    history.history[
+                        "val_loss"
+                    ][-1]
+                )
 
             return {
-
-                "dataset": dataset_info,
-
-                "validation_dataset":
-                    validation_info,
-
-                "epochs_requested":
-                    int(epochs),
-
-                "epochs_completed":
-                    len(
-                        history.history[
-                            "loss"
-                        ]
-                    ),
-
-                "accuracy":
+                "success": True,
+                "message": (
+                    "Model retrained successfully."
+                ),
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "forged_images": len(
+                    forged_images
+                ),
+                "genuine_images": len(
+                    genuine_images
+                ),
+                "backup_path": backup_path,
+                "accuracy": (
+                    round(
+                        float(final_accuracy),
+                        4
+                    )
+                    if final_accuracy is not None
+                    else None
+                ),
+                "validation_accuracy": (
                     round(
                         float(
-                            accuracy
-                        ) * 100,
-                        2
-                    ),
-
-                "validation_accuracy":
+                            final_val_accuracy
+                        ),
+                        4
+                    )
+                    if final_val_accuracy is not None
+                    else None
+                ),
+                "loss": (
                     round(
-                        float(
-                            validation_accuracy
-                        ) * 100,
-                        2
-                    ),
-
-                "backup_model":
-                    backup_file,
-
-                "model":
-                    self.model_path
+                        float(final_loss),
+                        4
+                    )
+                    if final_loss is not None
+                    else None
+                ),
+                "validation_loss": (
+                    round(
+                        float(final_val_loss),
+                        4
+                    )
+                    if final_val_loss is not None
+                    else None
+                )
             }
+
+        except Exception:
+
+            # -------------------------------------------------
+            # If retraining fails, restore the previous model
+            # -------------------------------------------------
+
+            if os.path.exists(
+                temporary_model_path
+            ):
+                try:
+                    os.remove(
+                        temporary_model_path
+                    )
+                except OSError:
+                    pass
+
+            if os.path.exists(
+                backup_path
+            ):
+                try:
+                    shutil.copy2(
+                        backup_path,
+                        self.model_path
+                    )
+                except OSError:
+                    pass
+
+            raise
 
         finally:
 
-            # Always remove temporary validation dataset
-            if (
-                validation_path
-                and os.path.exists(
-                    validation_path
-                )
-            ):
+            # -------------------------------------------------
+            # Remove temporary validation dataset
+            # -------------------------------------------------
 
-                shutil.rmtree(
-                    validation_path
-                )
+            if os.path.exists(
+                validation_root
+            ):
+                try:
+                    shutil.rmtree(
+                        validation_root
+                    )
+                except OSError:
+                    pass
