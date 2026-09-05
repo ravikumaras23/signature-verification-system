@@ -51,23 +51,34 @@ def create_app():
         exist_ok=True
     )
 
-    
-    
+
+    # ---------------------------------------------------------
+    # CORS CONFIGURATION
+    # ---------------------------------------------------------
 
     allowed_origins = [
+        "https://signature-verification-frontend.onrender.com",
         "https://signature-verification-system-ruby.vercel.app",
         "https://signature-verification-system-d2s5emzrj-ravi-6a21.vercel.app",
         "http://localhost:5173",
     ]
 
+    # Optional FRONTEND_URL from Render environment
     frontend_url = os.getenv("FRONTEND_URL")
 
-    if frontend_url and frontend_url not in allowed_origins:
-        allowed_origins.append(frontend_url)
+    if frontend_url:
+        frontend_url = frontend_url.rstrip("/")
+
+        if frontend_url not in allowed_origins:
+            allowed_origins.append(frontend_url)
 
     CORS(
         app,
-        origins=allowed_origins,
+        resources={
+            r"/api/*": {
+                "origins": allowed_origins
+            }
+        },
         methods=[
             "GET",
             "POST",
@@ -81,7 +92,6 @@ def create_app():
         ],
         supports_credentials=False
     )
-
 
     @app.after_request
     def add_cors_headers(response):
