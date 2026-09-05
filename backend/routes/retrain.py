@@ -69,6 +69,10 @@ def retrain_model():
 
     try:
 
+        # ---------------------------------------------------------
+        # Dataset directories
+        # ---------------------------------------------------------
+
         dataset_root = os.path.join(
             current_app.root_path,
             "dataset"
@@ -92,7 +96,10 @@ def retrain_model():
         genuine_saved = 0
         forged_saved = 0
 
+        # ---------------------------------------------------------
         # Save genuine images
+        # ---------------------------------------------------------
+
         for file in genuine_files:
 
             if not file.filename:
@@ -116,7 +123,10 @@ def retrain_model():
 
             genuine_saved += 1
 
+        # ---------------------------------------------------------
         # Save forged images
+        # ---------------------------------------------------------
+
         for file in forged_files:
 
             if not file.filename:
@@ -140,12 +150,30 @@ def retrain_model():
 
             forged_saved += 1
 
+        # ---------------------------------------------------------
+        # Validate uploaded files
+        # ---------------------------------------------------------
+
         if genuine_saved == 0 and forged_saved == 0:
             return jsonify({
                 "error": "No valid images were uploaded."
             }), 400
 
-        model_path = current_app.config["MODEL_PATH"]
+        # ---------------------------------------------------------
+        # IMPORTANT:
+        # DO NOT USE signature_model.keras FOR RETRAINING.
+        #
+        # The production model remains untouched.
+        #
+        # Retraining uses:
+        # backend/model/retrain_model.keras
+        # ---------------------------------------------------------
+
+        retrain_model_path = os.path.join(
+            current_app.root_path,
+            "model",
+            "retrain_model.keras"
+        )
 
         backup_path = os.path.join(
             current_app.root_path,
@@ -153,36 +181,61 @@ def retrain_model():
             "backups"
         )
 
-        # IMPORTANT:
-        # This matches the corrected SignatureRetrainer constructor.
+        os.makedirs(
+            os.path.dirname(retrain_model_path),
+            exist_ok=True
+        )
+
+        # ---------------------------------------------------------
+        # Create retrainer using SEPARATE model
+        # ---------------------------------------------------------
+
         retrainer = SignatureRetrainer(
-            model_path=model_path,
+            model_path=retrain_model_path,
             forged_dir=forged_path,
             genuine_dir=genuine_path,
             backup_dir=backup_path
         )
 
-        epochs = request.form.get("epochs", 10)
+        # ---------------------------------------------------------
+        # Epochs
+        # ---------------------------------------------------------
+
+        epochs = request.form.get(
+            "epochs",
+            10
+        )
 
         try:
             epochs = int(epochs)
         except (ValueError, TypeError):
             epochs = 10
 
-        epochs = max(1, min(50, epochs))
+        epochs = max(
+            1,
+            min(50, epochs)
+        )
+
+        # ---------------------------------------------------------
+        # Retrain
+        # ---------------------------------------------------------
 
         result = retrainer.retrain(
             epochs=epochs
         )
 
+        # ---------------------------------------------------------
+        # Response
+        # ---------------------------------------------------------
+
         return jsonify({
-            "message": "Model retrained successfully.",
+            "message": "Retraining model trained successfully.",
             "uploaded": {
                 "genuine": genuine_saved,
                 "forged": forged_saved
             },
             "training": result
-        })
+        }), 200
 
     except Exception as error:
 
